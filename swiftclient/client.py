@@ -24,6 +24,7 @@ from functools import wraps
 
 from urllib import quote as _quote
 from urlparse import urlparse, urlunparse
+from os.path import getsize
 
 try:
     from eventlet.green.httplib import HTTPException, HTTPSConnection
@@ -851,9 +852,12 @@ def put_object(url, token=None, container=None, name=None, contents=None,
             conn.putheader('Transfer-Encoding', 'chunked')
             conn.endheaders()
             chunk = contents.read(chunk_size)
+            chunk_index = 0
             while chunk:
                 conn.send('%x\r\n%s\r\n' % (len(chunk), chunk))
                 chunk = contents.read(chunk_size)
+                print chunk_index
+                chunk_index = chunk_index + 1
             conn.send('0\r\n\r\n')
         else:
             conn.endheaders()
@@ -1132,6 +1136,14 @@ class Connection(object):
 
 
 #get auth and get tenants list, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+# return the head of endpoint url, an authed token for super admin, 
+#and all tenants of all users in the system.
 def get_auth_superadmin(connection=None, **args):
     
     ks_authurl = args.get('ks_authurl', None) 
@@ -1183,6 +1195,13 @@ def get_auth_superadmin(connection=None, **args):
 
 
 #head all tenants' account, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+# return a list of dict. the dict fields are 'tenant_name', 'tenant_id, 'resps'. 
 def superadmin_head_accounts(connection=None, **args):
 
     endpoint_head, token, tenants = get_auth_superadmin(connection, **args)
@@ -1195,12 +1214,21 @@ def superadmin_head_accounts(connection=None, **args):
         ret={}
         ret['tenant_name'] = tes.name
         ret['tenant_id'] = tes.id
-        ret['resps'] = head_account(endpointurl, token)
+        ret['resps'] = head_account(endpointurl, token) 
+        # 'resps' is the returned dict of head_account, contains info of account.
         ret_list.append(ret)
     return ret_list
 
 
+
 #get all tenants' account, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+# return ta list of dict. the dict fields are 'tenant_name', 'tenant_id, 'resps'. 
 def superadmin_get_accounts(connection=None, **args):
     
     endpoint_head, token, tenants = get_auth_superadmin(connection, **args)
@@ -1214,11 +1242,20 @@ def superadmin_get_accounts(connection=None, **args):
         ret['tenant_name'] = tes.name
         ret['tenant_id'] = tes.id
         ret['resps'] = get_account(endpointurl, token)
+        # 'resps' is the returned dict of get_account.
         ret_list.append(ret)
     return ret_list
 
 
-#head any container, only used by superadmin
+#head any container of any tenant, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+#        container    container name
+#        tenant_name    tenant name of the container's owner.
 def superadmin_head_container(connection=None, **args):
     
     endpoint_head, token, tenants = get_auth_superadmin(connection, **args)
@@ -1238,7 +1275,16 @@ def superadmin_head_container(connection=None, **args):
     return {}
 
 
-#get any container, only used by superadmin
+#get any container of any tenant, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+#        container    container name
+#        tenant_name    tenant name of the container's owner.
+# return a dict. the dict fields are 'tenant_name', 'tenant_id, 'resps'. 
 def superadmin_get_container(connection=None, **args):
     
     endpoint_head, token, tenants = get_auth_superadmin(connection, **args)
@@ -1254,11 +1300,55 @@ def superadmin_get_container(connection=None, **args):
             ret['tenant_name'] = tes.name
             ret['tenant_id'] = tes.id
             ret['resps'] = get_container(endpointurl, token, container)
+            #'resps' are the responses of get_container().
             return ret
     return {}
 
 
-#head any container, only used by superadmin
+
+#get any container of any tenant, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+#        container    container name
+#        tenant_name    tenant name of the container's owner.
+#        headers    headers of the request
+# return a dict. the dict fields are 'tenant_name', 'tenant_id, 'resps'. 
+def superadmin_put_container(connection=None, **args):
+    
+    endpoint_head, token, tenants = get_auth_superadmin(connection, **args)
+    container = args.get('container', None)
+    tenant_name = args.get('tenant_name', None)
+    headers = args.get('headers', None)
+    print token
+    for tes in tenants:
+        if tes.name == 'service' or tes.enabled == False:
+            del tes
+            continue
+        if tes.name == tenant_name:
+            endpointurl = ("%s%s") % (endpoint_head, tes.id)
+            ret={}
+            ret['tenant_name'] = tes.name
+            ret['tenant_id'] = tes.id
+            ret['resps'] = put_container(endpointurl, token, container,headers)
+            return ret
+    return {}
+
+
+#head any object in any container of any tenant, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+#        container    container name
+#        tenant_name    tenant name of the container's owner.
+#        object    object name
+# return a dict. the dict fields are 'tenant_name', 'tenant_id, 'resps'. 
 def superadmin_head_object(connection=None, **args):
     
     endpoint_head, token, tenants = get_auth_superadmin(connection, **args)
@@ -1279,25 +1369,131 @@ def superadmin_head_object(connection=None, **args):
     return {}
 
 
+#upload an object to any container of any tenant, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+#        container    container name
+#        tenant_name    tenant name of the container's owner.
+#        object    object name
+#        chunk_size    if defined, chunk size of data to upload.
+# return a dict. the dict fields are 'tenant_name', 'tenant_id, 'resps'.
+def superadmin_put_object(connection=None, **args):
+    
+    endpoint_head, token, tenants = get_auth_superadmin(connection, **args)
+    container = args.get('container', None)
+    object = args.get('object', None)
+    path = args.get('path', None)
+    chunk_size = args.get('chunk_size', 65535)
+    tenant_name = args.get('tenant_name', None)
+    headers = args.get('headers', None)
+    ret={}
+    if path == None or object == None or container == None:
+        ret['resps'] = "None error."
+        return ret
+    for tes in tenants:
+        if tes.name == 'service' or tes.enabled == False:
+            del tes
+            continue
+        if tes.name == tenant_name:
+            endpointurl = ("%s%s") % (endpoint_head, tes.id)
+            ret['tenant_name'] = tes.name
+            ret['tenant_id'] = tes.id
+            ret['resps'] = put_object(url = endpointurl, token = token, 
+                                      container = container, name = object,
+                                      contents = open(path, 'rb'), 
+                                      content_length = getsize(path), 
+                                      chunk_size = chunk_size,
+                                      headers = headers)
+            return ret
+    return {}
+
+
+
+#upload an object to any container of any tenant, only used by superadmin
+#args:   ks_authurl    url of keystone or other auth service
+#        superadminname    username of super admin
+#        token    an authed token, if the superadmin has got authed before
+#        password    password of super admin
+#        superadmintenant_name    a tenant name of super admin
+#        os_options    other options of connections, if necessary
+#        container    container name
+#        tenant_name    tenant name of the container's owner.
+#        object    object name
+#        chunk_size(bytes)    if defined, chunk size of data to read. NOTE: If
+#you specify a resp_chunk_size you must fully read
+#the object's contents before making another
+#request. the returned value: ret['object_body'] is a generator of python.
+#notice: for understand python generator and iterator, plz see http://docs.python.org/2/glossary.html#term-generator
+# return a dict. the dict fields are 'tenant_name', 'tenant_id, 'resp_headers' and 'object_body'.
+def superadmin_get_object(connection=None, **args):
+    
+    endpoint_head, token, tenants = get_auth_superadmin(connection, **args)
+    container = args.get('container', None)
+    object = args.get('object', None)
+    tenant_name = args.get('tenant_name', None)
+    chunk_size = args.get('chunk_size', None)
+    ret={}
+    if object == None or container == None:
+        ret['resps'] = "None error."
+        return ret
+    for tes in tenants:
+        if tes.name == 'service' or tes.enabled == False:
+            del tes
+            continue
+        if tes.name == tenant_name:
+            endpointurl = ("%s%s") % (endpoint_head, tes.id)
+            ret['tenant_name'] = tes.name
+            ret['tenant_id'] = tes.id
+            ret['resp_headers'], ret['object_body'] = get_object(url = endpointurl, token = token, 
+                                      container = container, name = object,
+                                      resp_chunk_size = chunk_size)
+            # the content of object are stored in ret['object_body']
+            # notice: too big object may lead to mem shortage problem. use chunk_size param to get object content buffer by buffer.
+            # some info of object are stored in ret['resp_headers']
+            return ret
+    return {}
+
 
 #test case
 if __name__ == '__main__':
     
-    accounts = superadmin_get_accounts(ks_authurl='http://192.168.111.129:5000/v2.0',
+    accounts = superadmin_get_accounts(ks_authurl='http://localhost:5000/v2.0',
                             superadminname='admin',
                             superadmintenant_name='admin',
                             password='csdb123cnic')
     for acs in accounts:
         print acs
-
-    print superadmin_head_object(ks_authurl='http://192.168.111.129:5000/v2.0',
+        
+    ret = superadmin_put_object(ks_authurl='http://localhost:5000/v2.0',
                             superadminname='admin',
                             superadmintenant_name='admin',
-                            token='868e653486c5427baa2984a7a5b4513f',
+                            password='csdb123cnic',
                             tenant_name='test',
                             container='test-con-1',
-                            object='test-obj-1')
-    
+                            object = 'testobj-big',
+                            path = '/root/fedora16_x86_64.img',
+                            chunk_size = 1024*1024
+                            )
+        
+    ret = superadmin_get_object(ks_authurl='http://localhost:5000/v2.0',
+                            superadminname='admin',
+                            superadmintenant_name='admin',
+                            password='csdb123cnic',
+                            tenant_name='test',
+                            container='test-con-1',
+                            object = 'testobj',
+                            chunk_size = 24
+                            )
+    print ret['object_body'].next()  #we can use .next() to get a part of object_body, buffer by buffer
+    fp = open('newfile','w')
+    for content in ret['object_body']:  #iterate the object_body, buffer by buffer
+        print content
+        fp.write(content)
+    fp.close()
+    print ret['resp_headers']
 
-    
     #print client.get_auth()
